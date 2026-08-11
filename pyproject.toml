@@ -1,0 +1,10 @@
+[project]
+name = "comfyui-h3-refblockcache"
+version = "0.3.0"
+description = "Production-oriented quality-first block accelerator for native ComfyUI MiniMax H3 Ref2VA"
+requires-python = ">=3.10"
+
+[tool.comfy]
+PublisherId = "local"
+DisplayName = "H3 Ref2VA Accelerator"
+Icon = ""
