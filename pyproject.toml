@@ -1,6 +1,6 @@
 [project]
-name = "comfyui-h3-refblockcache"
-version = "0.3.0"
+name = "comfyui-h3-ref2va-accelerator"
+version = "0.4.2"
 description = "Production-oriented quality-first block accelerator for native ComfyUI MiniMax H3 Ref2VA"
 requires-python = ">=3.10"
 
