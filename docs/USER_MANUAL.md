@@ -1,6 +1,6 @@
 # MiniMax H3 Ref2VA Accelerator — User Manual
 
-Version 0.3.0
+Version 0.4.2
 
 ## 1. What this node does
 
@@ -21,7 +21,7 @@ Every built-in quality preset limits caching to one hit at a time. A real full t
 
 ![MiniMax H3 Ref2VA Accelerator node and controls](images/h3-ref2va-accelerator-node.png)
 
-The screenshot shows the complete node with advanced widgets visible. The displayed threshold values are only applied when `mode` is **Custom**. When a built-in preset is selected, its internal preset values are used.
+The screenshot illustrates the node layout. In v0.4.2, experimental tail controls are marked Advanced and may be hidden until Advanced widgets are shown. The displayed threshold values are only applied when `mode` is **Custom**. When a built-in preset is selected, its internal preset values are used.
 
 ## 3. Requirements
 
@@ -48,6 +48,10 @@ No extra Python packages are required by this node.
 3. Restart ComfyUI.
 4. Confirm that **MiniMax H3 Ref2VA Accelerator** appears under `MiniMax H3 > optimization`.
 
+### Upgrading from an older ZIP install
+
+Existing workflows remain compatible because the node class ID is preserved. If an older manual/ZIP install lives in a folder named `ComfyUI-H3-RefBlockCache`, remove or rename that folder before installing `ComfyUI-H3-Ref2VA-Accelerator`. Keeping both copies can cause duplicate node registration.
+
 ## 5. Add the node to a workflow
 
 Place the accelerator after model-loading, attention patching, and H3 sampling/sigma-shift setup, but before the guider and scheduler consume the model.
@@ -67,10 +71,26 @@ Use the accelerator's patched `MODEL` output everywhere the downstream guider or
 
 1. Set `mode` to **Ref2VA Balanced**.
 2. Set `cache_storage` to **CPU (VRAM-safe)** when using a pruned/offloaded BF16 checkpoint.
-3. Leave `debug` off.
-4. Queue a normal fixed-seed workflow.
-5. Read the end-of-run console summary to see the hit count and cache behavior.
-6. Compare the result with a native/bypassed run before adopting the node for keeper shots.
+3. Leave `cpu_tail_compute` at **Safe CPU (v0.3 behavior)**.
+4. Leave `tail_rescale` **off**.
+5. Leave `debug` off.
+6. Queue a normal fixed-seed workflow.
+7. Read the end-of-run console summary to see the hit count and cache behavior.
+8. Compare the result with a native/bypassed run before adopting the node for keeper shots.
+
+## 6.1 Production settings at a glance
+
+Validated quality-first BF16 defaults:
+
+| Control | Production setting |
+| --- | --- |
+| `mode` | **Ref2VA Balanced** |
+| `cache_storage` | **CPU (VRAM-safe)** |
+| `cpu_tail_compute` | **Safe CPU (v0.3 behavior)** |
+| `tail_rescale` | **OFF** |
+| `debug` | **OFF** |
+
+The two tail experiments are retained for advanced benchmarking only: Auto GPU Fast Path showed negligible wall-clock benefit in the validated BF16 test, and tail rescale did not show a clear quality advantage.
 
 ## 7. Controls
 
@@ -87,9 +107,22 @@ Chooses a tested preset, diagnostics-only operation, or Custom tuning.
 - **CPU (VRAM-safe):** stores the persistent residual cache in system RAM and transfers it to the GPU on a hit. Recommended for pruned BF16/offloaded workflows.
 - **GPU (faster, uses VRAM):** keeps the cache resident in VRAM. Use only when your checkpoint leaves ample VRAM headroom.
 
+### cpu_tail_compute
+
+Only affects **CPU (VRAM-safe)** cache storage.
+
+- **Safe CPU (v0.3 behavior):** default/recommended for pruned BF16 and DynamicVRAM/AIMDO workflows. It stages block-0 output to CPU immediately on every full step, preserving the most VRAM headroom.
+- **Auto GPU Fast Path:** advanced benchmark option. When a VRAM-headroom check passes, it temporarily keeps block-0 output on GPU and forms the tail there before one device-to-host copy. On the validated RTX 5090 + pruned BF16 workflow it engaged on every full step but saved only about **2 seconds** over an ~11 minute sampler run. Safe CPU remains the production recommendation.
+
+For fixed-seed benchmarking, change only this control between runs. It does not change cache thresholds or hit eligibility.
+
 ### debug
 
 Enables detailed per-step diagnostic logging. Leave it off for ordinary production runs; enable it when studying guard behavior or tuning Custom mode.
+
+### tail_rescale (experimental)
+
+Advanced experimental control, default **off**. On cache hits, it scales the reused tail residual per segment by the energy ratio of the current vs cached block-0 residual, clamped to ±10%. Fixed-seed testing produced slightly different output without a clear quality improvement, so the production recommendation is to leave it **off**. With `debug` enabled, applied segment scales are logged on every hit.
 
 ### Custom-only advanced controls
 
@@ -179,9 +212,21 @@ The connected model is not the supported native H3 model class. Check the loader
 
 Another trajectory or block-cache accelerator is already active in the same model branch. Remove one of the competing accelerators.
 
-### Out of memory with GPU cache
+### Out of memory or AIMDO/DynamicVRAM pressure
 
-Switch `cache_storage` to **CPU (VRAM-safe)**. GPU storage can consume multiple GiB depending on the workflow.
+Use `cache_storage = CPU (VRAM-safe)` and `cpu_tail_compute = Safe CPU (v0.3 behavior)`. GPU cache storage can consume multiple GiB, while Auto GPU Fast Path can temporarily increase VRAM pressure during full steps.
+
+### Summary says the model ran steps “without a Ref2VA payload”
+
+The accelerator saw H3 steps but no Ref2VA reference payload, so it stayed idle by design. This usually means the workflow is running plain T2V/I2V rather than Ref2VA, or the references are not reaching the sampler. Nothing was cached and output is native.
+
+### Warning: “required guard metric(s) unavailable”
+
+The Ref2VA payload arrived, but one or more required guard metrics (global, video, audio, temporal) could not be computed, so caching stayed disabled for safety. Most likely a native H3/Ref2VA layout change after a ComfyUI update, or a workflow missing those segments (for example, no target-audio track). Run Observe Only with `debug` enabled and check for a node update.
+
+### Warning: “comfy.model_prefetch not found”
+
+Your ComfyUI build no longer exposes the prefetch module this node hooks. The accelerator still works and cache hits still skip block compute, but tail-weight prefetch is not suppressed on hits, so offloaded BF16 checkpoints may see smaller wall-clock savings. Check for a node update.
 
 ### Little or no speed improvement
 
@@ -201,4 +246,4 @@ Set `mode` to **Custom**. Advanced widgets do not override the built-in presets.
 
 ## 12. Tested environment
 
-The v0.3 production profile was tested on a 32 GB RTX 5090 with native H3 pruned BF16 and pruned INT8 ConvRot checkpoints, Sage attention patching, DynamicVRAM/AIMDO, and RES Multistep. Compatibility and performance may change as ComfyUI's native H3 implementation evolves.
+The production profile was tested on a 32 GB RTX 5090 with native H3 pruned BF16 and pruned INT8 ConvRot checkpoints, Sage attention patching, DynamicVRAM/AIMDO, and RES Multistep. Compatibility and performance may change as ComfyUI's native H3 implementation evolves.
